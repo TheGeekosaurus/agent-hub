@@ -54,6 +54,20 @@
   .avatar { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; font-weight: 700; font-size: 16px; color: #0b0e14; flex-shrink: 0; }
   .card-title { font-weight: 600; font-size: 15px; }
   .card-role { color: var(--muted); font-size: 12px; }
+  main.wide { max-width: 1480px; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; align-items: start; }
+  .side-col { position: sticky; top: 84px; max-height: calc(100vh - 100px); overflow-y: auto; }
+  @media (max-width: 1000px) { .layout { grid-template-columns: minmax(0, 1fr); } .side-col { position: static; max-height: none; } }
+  .side-panel { padding: 10px 14px; }
+  .side-sub { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--faint); font-weight: 600; padding: 6px 0; cursor: default; }
+  details.paused-group summary { cursor: pointer; border-top: 1px solid var(--line); margin-top: 6px; padding-top: 10px; }
+  details.paused-group .sched { opacity: .65; }
+  .sched { display: block; padding: 9px 0; border-top: 1px solid var(--line); color: var(--text); }
+  .sched:hover { text-decoration: none; background: var(--panel-2); }
+  .sched-when { font-size: 12px; color: var(--accent); font-weight: 500; }
+  details .sched-when { color: var(--muted); }
+  .sched-name { font-size: 13px; font-weight: 500; margin: 1px 0; }
+  .sched-meta { font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
   .routine-line { font-size: 12px; color: var(--muted); }
   .mission { color: var(--muted); font-size: 12.5px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -108,7 +122,9 @@
   .empty { color: var(--faint); padding: 24px; text-align: center; font-size: 13px; }
   .notice { background: rgba(251,191,36,.07); border: 1px solid rgba(251,191,36,.25); color: #e9d8a6; border-radius: 10px; padding: 12px 14px; font-size: 13px; }
   .err { color: var(--red); }
-  @media (max-width: 600px) { main { padding: 16px; } header { padding: 12px 16px; } }
+  @media (max-width: 600px) { main { padding: 16px; } header { padding: 12px 16px; }
+    .brain-status { order: 3; width: 100%; } .grid, .needs { grid-template-columns: minmax(0, 1fr); } }
+  .brain-status { min-width: 0; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
@@ -188,28 +204,30 @@ function renderOverview() {
   const sorted = [...agents].sort((x, y) => (order[x.status] ?? 1) - (order[y.status] ?? 1))
   const tally = Object.entries(agents.reduce((t, a) => (t[a.status] = (t[a.status] || 0) + 1, t), {}))
     .sort((x, y) => (order[x[0]] ?? 1) - (order[y[0]] ?? 1)).map(([k, n]) => `${n} ${k}`).join(', ')
-  $app.innerHTML = `
+  $app.innerHTML = `<div class="layout"><div class="main-col">
     <h2>Needs you</h2>
     <div class="needs">
       ${needBox('Proposals awaiting your decision', needs.proposals, r => `<li>${recLink(r)} · ${esc(r.agentName)}</li>`, 'Nothing pending')}
       ${needBox('Checks due', needs.due, r => `<li>${recLink(r)} · ${esc(r.agentName)} · due ${esc(r.checkAt)}</li>`, 'No task is past its checkAt')}
       ${needBox('Stuck tasks', needs.stuck, r => `<li>${recLink(r)} · ${esc(r.agentName)}</li>`, 'Nothing running over 14 days')}
     </div>
-    <h2>Schedule</h2>
-    ${scheduleTable(overview.schedule)}
     <h2>Agents · ${tally}</h2>
-    <div class="grid">${sorted.map(card).join('') || '<div class="empty">No agent folders in brain/agents/</div>'}</div>`
+    <div class="grid">${sorted.map(card).join('') || '<div class="empty">No agent folders in brain/agents/</div>'}</div>
+    </div><aside class="side-col"><h2>Schedule</h2>${scheduleList(overview.schedule)}</aside></div>`
 }
 
-function scheduleTable(rows) {
+function scheduleList(rows) {
   if (!rows.length) return '<div class="panel empty">No routines recorded in any agents/*/routines.md</div>'
-  return `<div class="panel table-wrap"><table>
-    <tr><th>Next run</th><th>Agent</th><th>Routine</th><th>When</th><th>Status</th></tr>
-    ${rows.map(r => `<tr class="click" onclick="location.hash='#/agent/${esc(r.agent)}/routines'">
-      <td style="white-space:nowrap">${r.active ? esc(fmtRun(r.nextRun)) : '<span style="color:var(--faint)">—</span>'}</td>
-      <td>${esc(r.agentName)}</td><td>${esc(r.name)}<div style="color:var(--faint);font-size:12px">${esc(r.loopJob.replace(/`/g, ''))}</div></td>
-      <td>${esc(r.plain)}</td><td>${statusChip(r.active ? 'active' : (r.status.split(/[ ,(]/)[0] || 'paused'))}</td></tr>`).join('')}
-  </table></div>`
+  const item = r => `<a class="sched" href="#/agent/${esc(r.agent)}/routines">
+    <div class="sched-when">${r.active ? esc(fmtRun(r.nextRun)) : esc(r.plain)}</div>
+    <div class="sched-name">${esc(r.name)}</div>
+    <div class="sched-meta"><span class="dot" style="background:${colorFor(r.agent)}"></span>${esc(r.agentName)}${r.active ? ` · ${esc(r.plain)}` : ''}</div></a>`
+  const act = rows.filter(r => r.active), off = rows.filter(r => !r.active)
+  return `<div class="panel side-panel">
+    <div class="side-sub">Upcoming · ${act.length}</div>
+    ${act.map(item).join('') || '<div class="none" style="color:var(--faint);font-size:12px;padding:6px 0">Nothing scheduled</div>'}
+    ${off.length ? `<details class="paused-group"${act.length ? '' : ' open'}><summary class="side-sub">Paused · ${off.length}</summary>${off.map(item).join('')}</details>` : ''}
+  </div>`
 }
 
 function card(a) {
@@ -343,6 +361,7 @@ async function route() {
     const filePath = parts[2] === 'file' ? decodeURIComponent(parts.slice(3).join('/')) : null
     await renderAgent(parts[1], filePath ? null : parts[2], filePath)
   } else renderOverview()
+  $app.classList.toggle('wide', !(parts[0] === 'agent' && parts[1]))
   window.scrollTo(0, 0)
 }
 window.addEventListener('hashchange', route)
