@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Hub</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<style>
+  :root {
+    --bg: #0b0e14; --panel: #121722; --panel-2: #171d2a; --line: #232b3b;
+    --text: #e6e9ef; --muted: #8a94a7; --faint: #5b6577;
+    --accent: #7c9cff; --green: #34d399; --amber: #fbbf24; --red: #f87171; --slate: #64748b;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 Inter, system-ui, sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, .mono { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; }
+
+  header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between;
+    padding: 16px 24px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; cursor: pointer; }
+  .brand .logo { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, #7c9cff, #a78bfa); }
+  .brain-status { color: var(--muted); font-size: 12px; display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+  .consoles { display: flex; gap: 8px; flex-wrap: wrap; }
+  .consoles a { font-size: 12px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); }
+  .consoles a:hover { color: var(--text); text-decoration: none; border-color: var(--faint); }
+
+  main { max-width: 1240px; margin: 0 auto; padding: 24px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 28px 0 12px; font-weight: 600; }
+  h2:first-child { margin-top: 0; }
+
+  .needs { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  .need { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
+  .need .head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+  .need .head b { font-size: 13px; }
+  .need .n { font-size: 22px; font-weight: 700; }
+  .need ul { list-style: none; margin: 0; padding: 0; }
+  .need li { font-size: 12px; padding: 4px 0; border-top: 1px solid var(--line); color: var(--muted); }
+  .need li a { color: var(--text); }
+  .need .none { font-size: 12px; color: var(--faint); }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px;
+    cursor: pointer; transition: border-color .15s, transform .15s; display: flex; flex-direction: column; gap: 10px; }
+  .card:hover { border-color: var(--faint); transform: translateY(-1px); }
+  .card.idle { opacity: .6; }
+  .card-top { display: flex; gap: 12px; align-items: center; }
+  .avatar { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; font-weight: 700; font-size: 16px; color: #0b0e14; flex-shrink: 0; }
+  .card-title { font-weight: 600; font-size: 15px; }
+  .card-role { color: var(--muted); font-size: 12px; }
+  .mission { color: var(--muted); font-size: 12.5px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .chip.green { color: var(--green); border-color: rgba(52,211,153,.35); }
+  .chip.amber { color: var(--amber); border-color: rgba(251,191,36,.35); }
+  .chip.red { color: var(--red); border-color: rgba(248,113,113,.35); }
+  .chip.accent { color: var(--accent); border-color: rgba(124,156,255,.35); }
+  .stats { display: flex; gap: 16px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 10px; }
+  .stats b { color: var(--text); font-size: 14px; display: block; }
+  .conn { display: flex; gap: 5px; align-items: center; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+  .dot.linked { background: var(--green); } .dot.external { background: var(--amber); } .dot.missing { background: var(--slate); }
+
+  /* Detail */
+  .back { color: var(--muted); font-size: 13px; cursor: pointer; display: inline-block; margin-bottom: 14px; }
+  .detail-head { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 18px; }
+  .detail-head .avatar { width: 56px; height: 56px; font-size: 22px; border-radius: 14px; }
+  .detail-head h1 { margin: 0; font-size: 22px; }
+  .meta-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 18px; overflow-x: auto; }
+  .tab { padding: 9px 14px; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; white-space: nowrap; font-weight: 500; }
+  .tab.on { color: var(--text); border-bottom-color: var(--accent); }
+  .tab .count { font-size: 11px; color: var(--faint); margin-left: 4px; }
+  .two { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; }
+  @media (max-width: 860px) { .two { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; min-width: 0; }
+  .panel h3 { margin: 0 0 10px; font-size: 13px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+  .conn-list { display: flex; flex-direction: column; gap: 10px; }
+  .conn-item { display: flex; gap: 10px; align-items: flex-start; }
+  .conn-item .dot { margin-top: 6px; }
+  .conn-item small { display: block; color: var(--muted); font-size: 12px; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--faint); font-weight: 600; }
+  tr.click { cursor: pointer; } tr.click:hover td { background: var(--panel-2); }
+  .table-wrap { overflow-x: auto; }
+
+  .md { overflow-wrap: anywhere; }
+  .md h1 { font-size: 20px; } .md h2 { font-size: 15px; text-transform: none; letter-spacing: 0; color: var(--text); margin: 22px 0 8px; }
+  .md h3 { font-size: 14px; }
+  .md p, .md li { color: #c9cfdb; }
+  .md code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+  .md pre { background: var(--panel-2); padding: 12px; border-radius: 8px; overflow-x: auto; }
+  .md pre code { background: none; padding: 0; }
+  .md table { margin: 10px 0; font-size: 13px; }
+  .md blockquote { border-left: 3px solid var(--line); margin: 0; padding-left: 12px; color: var(--muted); }
+  .fm { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; font-size: 12px; margin-bottom: 14px;
+    padding: 12px; background: var(--panel-2); border-radius: 8px; }
+  .fm dt { color: var(--faint); } .fm dd { margin: 0; }
+  .empty { color: var(--faint); padding: 24px; text-align: center; font-size: 13px; }
+  .notice { background: rgba(251,191,36,.07); border: 1px solid rgba(251,191,36,.25); color: #e9d8a6; border-radius: 10px; padding: 12px 14px; font-size: 13px; }
+  .err { color: var(--red); }
+  @media (max-width: 600px) { main { padding: 16px; } header { padding: 12px 16px; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand" onclick="location.hash=''"><div class="logo"></div>Agent Hub</div>
+  <div class="brain-status" id="brain-status">Loading…</div>
+  <nav class="consoles">
+    <a href="http://localhost:18792" target="_blank" rel="noopener">OpenClaw ↗</a>
+    <a href="http://localhost:9119" target="_blank" rel="noopener">Hermes ↗</a>
+  </nav>
+</header>
+<main id="app"><div class="empty">Loading…</div></main>
+
+<script>
+const $app = document.getElementById('app')
+const PALETTE = ['#7c9cff', '#34d399', '#fbbf24', '#f472b6', '#a78bfa', '#22d3ee', '#fb923c', '#a3e635']
+let overview = null
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+const md = s => DOMPurify.sanitize(marked.parse(s || ''))
+const colorFor = slug => PALETTE[[...slug].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % PALETTE.length]
+const avatar = a => `<div class="avatar" style="background:${colorFor(a.slug)}">${esc((a.name || a.slug)[0].toUpperCase())}</div>`
+const ago = iso => {
+  if (!iso) return '—'
+  const d = (Date.now() - new Date(iso)) / 1000
+  if (d < 3600) return Math.max(1, Math.round(d / 60)) + 'm ago'
+  if (d < 86400) return Math.round(d / 3600) + 'h ago'
+  return Math.round(d / 86400) + 'd ago'
+}
+const STATUS_CHIP = { todo: '', running: 'accent', in_review: 'amber', done: 'green', failed: 'red', cancelled: '',
+  pending: 'amber', accepted: 'green', rejected: 'red', active: 'green', superseded: '', archived: '' }
+const statusChip = s => `<span class="chip ${STATUS_CHIP[s] || ''}">${esc((s || 'unknown').replace('_', ' '))}</span>`
+const RUNG = { 1: 'monitor', 2: 'propose', 3: 'supervised drafts', 4: 'live writes' }
+
+function splitFrontmatter(text) {
+  const m = text.match(/^---\n([\s\S]*?)\n---\n?/)
+  if (!m) return [[], text]
+  const rows = m[1].split('\n').map(l => l.match(/^([\w-]+):\s*(.*)$/)).filter(Boolean).map(x => [x[1], x[2]])
+  return [rows, text.slice(m[0].length)]
+}
+
+async function getJSON(url) {
+  const r = await fetch(url)
+  if (!r.ok) throw new Error(`${url} → HTTP ${r.status}`)
+  return r.json()
+}
+
+function renderBrainStatus(b) {
+  const parts = [`<span>brain <code>${esc(b.branch || '?')}</code> @ <code>${esc(b.commit || '?')}</code> · ${ago(b.committedAt)}</span>`]
+  if (b.behind) parts.push(`<span class="chip amber" title="Run git pull in ~/brain">${b.behind} commits behind origin</span>`)
+  if (b.ahead) parts.push(`<span class="chip accent">${b.ahead} local commits not pushed</span>`)
+  parts.push(`<span title="When this server last fetched from GitHub">last fetch ${ago(b.lastFetch)}</span>`)
+  document.getElementById('brain-status').innerHTML = parts.join('')
+}
+
+// ── Overview ───────────────────────────────────────────────────────────
+function needBox(title, items, line, emptyMsg) {
+  return `<div class="need"><div class="head"><b>${title}</b><span class="n">${items.length}</span></div>
+    ${items.length ? `<ul>${items.slice(0, 6).map(line).join('')}</ul>` : `<div class="none">${emptyMsg}</div>`}</div>`
+}
+const recLink = r => `<a href="#/agent/${esc(r.agent)}/file/${encodeURIComponent(r.path)}">${esc(r.title)}</a>`
+
+function renderOverview() {
+  const { agents, needs } = overview
+  const active = agents.filter(a => a.status !== 'idle'), idle = agents.filter(a => a.status === 'idle')
+  $app.innerHTML = `
+    <h2>Needs you</h2>
+    <div class="needs">
+      ${needBox('Proposals awaiting your decision', needs.proposals, r => `<li>${recLink(r)} · ${esc(r.agentName)}</li>`, 'Nothing pending')}
+      ${needBox('Checks due', needs.due, r => `<li>${recLink(r)} · ${esc(r.agentName)} · due ${esc(r.checkAt)}</li>`, 'No task is past its checkAt')}
+      ${needBox('Stuck tasks', needs.stuck, r => `<li>${recLink(r)} · ${esc(r.agentName)}</li>`, 'Nothing running over 14 days')}
+    </div>
+    <h2>Agents · ${active.length} active${idle.length ? `, ${idle.length} idle` : ''}</h2>
+    <div class="grid">${[...active, ...idle].map(card).join('') || '<div class="empty">No agent folders in brain/agents/</div>'}</div>`
+}
+
+function card(a) {
+  const tc = a.taskCounts
+  const open = (tc.todo || 0) + (tc.running || 0) + (tc.in_review || 0)
+  return `<div class="card ${a.status === 'idle' ? 'idle' : ''}" onclick="location.hash='#/agent/${esc(a.slug)}'">
+    <div class="card-top">${avatar(a)}<div><div class="card-title">${esc(a.name)}</div><div class="card-role">${esc(a.role || a.slug)}</div></div></div>
+    <div class="chips">
+      ${a.status === 'idle' ? '<span class="chip">idle</span>' : '<span class="chip green">active</span>'}
+      ${a.runtime ? `<span class="chip">${esc(a.runtime)}</span>` : ''}
+      ${a.rung ? `<span class="chip accent" title="${esc(RUNG[a.rung] || '')}">rung ${esc(a.rung)}</span>` : ''}
+      ${a.reportsTo ? `<span class="chip">→ ${esc(a.reportsTo)}</span>` : ''}
+      ${a.metricSet ? '' : '<span class="chip amber">no success metric</span>'}
+    </div>
+    <div class="mission">${esc(a.mission.replace(/\*\*|`/g, ''))}</div>
+    <div class="chips">${a.connections.map(c => `<span class="conn chip" title="${esc(c.detail)}"><span class="dot ${c.state}"></span>${esc(c.label)}</span>`).join('')}</div>
+    <div class="stats">
+      <div><b>${open}</b>open tasks</div><div><b>${tc.done || 0}</b>done</div>
+      <div><b>${a.activeLearnings}</b>learnings</div><div><b>${a.pendingProposals.length}</b>proposals</div>
+    </div>
+  </div>`
+}
+
+// ── Agent detail ───────────────────────────────────────────────────────
+async function renderAgent(slug, tab, filePath) {
+  let a
+  try { a = await getJSON(`/api/agent?slug=${encodeURIComponent(slug)}`) }
+  catch (e) { $app.innerHTML = `<div class="empty err">${esc(e.message)}</div>`; return }
+  tab = filePath ? 'file' : (tab || 'overview')
+  const r = a.records
+  const tabs = [['overview', 'Overview'], ['tasks', 'Tasks', r.tasks.length], ['learnings', 'Learnings', r.learnings.length],
+    ['proposals', 'Proposals', r.proposals.length], ['activity', 'Activity'], ['files', 'Files', a.files.length]]
+  $app.innerHTML = `
+    <span class="back" onclick="location.hash=''">← All agents</span>
+    <div class="detail-head">${avatar(a)}<div>
+      <h1>${esc(a.name)}</h1><div class="card-role">${esc(a.role)}</div>
+      <div class="meta-row">
+        ${a.status === 'idle' ? '<span class="chip">idle</span>' : '<span class="chip green">active</span>'}
+        ${a.runtime ? `<span class="chip">${esc(a.runtime)}</span>` : ''}
+        ${a.rung ? `<span class="chip accent">rung ${esc(a.rung)} · ${esc(RUNG[a.rung] || '')}</span>` : ''}
+        ${a.owner ? `<span class="chip">owner ${esc(a.owner)}</span>` : ''}
+        ${a.reportsTo ? `<span class="chip">reports to ${esc(a.reportsTo)}</span>` : ''}
+        ${a.updatedAt ? `<span class="chip">updated ${esc(a.updatedAt)}</span>` : ''}
+      </div></div></div>
+    <div class="tabs">${tabs.map(([k, label, n]) =>
+      `<div class="tab ${k === tab ? 'on' : ''}" onclick="location.hash='#/agent/${esc(slug)}/${k}'">${label}${n != null ? `<span class="count">${n}</span>` : ''}</div>`).join('')}
+      ${tab === 'file' ? '<div class="tab on">File</div>' : ''}</div>
+    <div id="tab-body"></div>`
+  const body = document.getElementById('tab-body')
+
+  if (tab === 'overview') {
+    const s = a.sections
+    const block = (h) => s[h] ? `<h2>${esc(h)}</h2>${md(s[h])}` : ''
+    body.innerHTML = `<div class="two">
+      <div class="panel md">${block('Mission')}${block('Success metric')}${block('Cadence')}${block('May write')}
+        ${!s['Mission'] ? '<div class="empty">agent.md has no Mission section</div>' : ''}</div>
+      <div style="display:flex;flex-direction:column;gap:16px">
+        <div class="panel"><h3>Connections</h3><div class="conn-list">${a.connections.map(c =>
+          `<div class="conn-item"><span class="dot ${c.state}"></span><div>${esc(c.label)}<small>${esc(c.detail)}</small></div></div>`).join('')}</div></div>
+        <div class="panel"><h3>Needs attention</h3>${
+          [...a.pendingProposals.map(p => `<div>Proposal: <a href="#/agent/${esc(slug)}/file/${encodeURIComponent(p.path)}">${esc(p.title)}</a></div>`),
+           ...a.due.map(t => `<div>Check due ${esc(t.checkAt)}: <a href="#/agent/${esc(slug)}/file/${encodeURIComponent(t.path)}">${esc(t.title)}</a></div>`),
+           ...a.stuck.map(t => `<div>Stuck: <a href="#/agent/${esc(slug)}/file/${encodeURIComponent(t.path)}">${esc(t.title)}</a></div>`)].join('')
+          || '<div class="none" style="color:var(--faint);font-size:12px">Nothing</div>'}</div>
+      </div></div>`
+  } else if (tab === 'tasks' || tab === 'learnings' || tab === 'proposals') {
+    const rows = r[tab]
+    const extra = tab === 'tasks' ? ['Priority', 'checkAt'] : ['checkAt']
+    body.innerHTML = rows.length ? `<div class="panel table-wrap"><table>
+      <tr><th>Title</th><th>Status</th>${extra.map(h => `<th>${h}</th>`).join('')}<th>Created</th></tr>
+      ${rows.map(x => `<tr class="click" onclick="location.hash='#/agent/${esc(slug)}/file/${encodeURIComponent(x.path)}'">
+        <td>${esc(x.title)}<div class="mono" style="color:var(--faint)">${esc(x.path)}</div></td><td>${statusChip(x.status)}</td>
+        ${tab === 'tasks' ? `<td>${esc(x.priority)}</td>` : ''}<td>${esc(x.checkAt || '—')}</td><td>${esc(x.createdAt || x.modified.slice(0, 10))}</td></tr>`).join('')}
+      </table></div>` : `<div class="panel empty">No ${tab} yet. They appear here when the agent writes to agents/${esc(slug)}/${tab}/</div>`
+  } else if (tab === 'files') {
+    body.innerHTML = `<div class="panel">${a.files.map(f => `<div style="padding:6px 0;border-bottom:1px solid var(--line)">
+      <a class="mono" href="#/agent/${esc(slug)}/file/${encodeURIComponent(f)}">${esc(f)}</a></div>`).join('') || '<div class="empty">No files</div>'}</div>`
+  } else if (tab === 'activity') {
+    body.innerHTML = '<div class="panel empty">Loading…</div>'
+    const act = await getJSON(`/api/activity?agent=${encodeURIComponent(a.name)}`)
+    if (!act.connected) {
+      body.innerHTML = `<div class="notice">The activity log isn't connected on this server yet. Agents write every run step to
+        <code>agent_logs</code> in the Geeko Supabase project (<code>knowledge/agent-building/activity-log.md</code>).
+        To show it here, add <code>SUPABASE_LOGS_URL</code> and a read key <code>SUPABASE_LOGS_READ_KEY</code> to
+        <code>~/agent-hub/.env</code> and restart the hub.</div>`
+    } else if (act.error) {
+      body.innerHTML = `<div class="panel err">Couldn't read the activity log: ${esc(act.error)}</div>`
+    } else {
+      body.innerHTML = act.rows.length ? `<div class="panel table-wrap"><table>
+        <tr><th>When</th><th>Action</th><th>Result</th><th>What</th></tr>
+        ${act.rows.map(x => `<tr><td style="white-space:nowrap">${esc(new Date(x.created_at).toLocaleString())}</td><td>${esc(x.action || '')}</td>
+          <td>${statusChip(x.result || x.status)}</td><td><b>${esc(x.task_description || '')}</b>
+          <div style="color:var(--muted);font-size:12px;white-space:pre-wrap">${esc(x.details || '')}</div>
+          ${x.link ? `<a href="${esc(x.link)}" target="_blank" rel="noopener">${esc(x.link)}</a>` : ''}</td></tr>`).join('')}
+        </table></div>` : `<div class="panel empty">Connected, but no rows for "${esc(a.name)}" yet.</div>`
+    }
+  } else if (tab === 'file') {
+    body.innerHTML = '<div class="panel empty">Loading…</div>'
+    const res = await fetch(`/api/file?slug=${encodeURIComponent(slug)}&path=${encodeURIComponent(filePath)}`)
+    if (!res.ok) { body.innerHTML = `<div class="panel err">Can't open ${esc(filePath)}</div>`; return }
+    const [fm, text] = splitFrontmatter(await res.text())
+    body.innerHTML = `<div class="panel md"><div class="mono" style="color:var(--faint);margin-bottom:10px">agents/${esc(slug)}/${esc(filePath)}</div>
+      ${fm.length ? `<dl class="fm">${fm.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}${md(text)}</div>`
+  }
+}
+
+// ── Router ─────────────────────────────────────────────────────────────
+async function route() {
+  const parts = location.hash.replace(/^#\/?/, '').split('/')
+  try {
+    overview = await getJSON('/api/overview')
+    renderBrainStatus(overview.brain)
+  } catch (e) { $app.innerHTML = `<div class="empty err">Can't reach the hub server: ${esc(e.message)}</div>`; return }
+  if (parts[0] === 'agent' && parts[1]) {
+    const filePath = parts[2] === 'file' ? decodeURIComponent(parts.slice(3).join('/')) : null
+    await renderAgent(parts[1], filePath ? null : parts[2], filePath)
+  } else renderOverview()
+  window.scrollTo(0, 0)
+}
+window.addEventListener('hashchange', route)
+route()
+</script>
+</body>
+</html>
