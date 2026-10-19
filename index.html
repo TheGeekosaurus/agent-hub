@@ -54,6 +54,7 @@
   .avatar { width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; font-weight: 700; font-size: 16px; color: #0b0e14; flex-shrink: 0; }
   .card-title { font-weight: 600; font-size: 15px; }
   .card-role { color: var(--muted); font-size: 12px; }
+  .routine-line { font-size: 12px; color: var(--muted); }
   .mission { color: var(--muted); font-size: 12.5px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
@@ -138,8 +139,19 @@ const ago = iso => {
   return Math.round(d / 86400) + 'd ago'
 }
 const STATUS_CHIP = { todo: '', running: 'accent', in_review: 'amber', done: 'green', failed: 'red', cancelled: '',
-  pending: 'amber', accepted: 'green', rejected: 'red', active: 'green', superseded: '', archived: '' }
+  pending: 'amber', paused: 'amber', accepted: 'green', rejected: 'red', active: 'green', superseded: '', archived: '' }
 const statusChip = s => `<span class="chip ${STATUS_CHIP[s] || ''}">${esc((s || 'unknown').replace('_', ' '))}</span>`
+const statusBadge = st => st === 'idle' ? '<span class="chip">idle</span>'
+  : st === 'paused' ? '<span class="chip amber">paused</span>'
+  : st === 'retired' ? '<span class="chip red">retired</span>' : '<span class="chip green">active</span>'
+const fmtRun = iso => iso ? new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles' }) + ' PT' : '—'
+function routineLine(a) {
+  if (!a.routines) return '<span style="color:var(--faint)">No routines.md yet</span>'
+  const rs = a.routines.routines, act = rs.filter(r => r.active)
+  if (!rs.length) return 'No routines'
+  const next = act.map(r => r.nextRun).filter(Boolean).sort()[0]
+  return `${rs.length} routine${rs.length > 1 ? 's' : ''} · ${act.length ? `${act.length} active · next ${fmtRun(next)}` : '<span style="color:var(--amber)">all paused</span>'}`
+}
 const RUNG = { 1: 'monitor', 2: 'propose', 3: 'supervised drafts', 4: 'live writes' }
 
 function splitFrontmatter(text) {
@@ -172,7 +184,10 @@ const recLink = r => `<a href="#/agent/${esc(r.agent)}/file/${encodeURIComponent
 
 function renderOverview() {
   const { agents, needs } = overview
-  const active = agents.filter(a => a.status !== 'idle'), idle = agents.filter(a => a.status === 'idle')
+  const order = { active: 0, paused: 1, idle: 2, retired: 3 }
+  const sorted = [...agents].sort((x, y) => (order[x.status] ?? 1) - (order[y.status] ?? 1))
+  const tally = Object.entries(agents.reduce((t, a) => (t[a.status] = (t[a.status] || 0) + 1, t), {}))
+    .sort((x, y) => (order[x[0]] ?? 1) - (order[y[0]] ?? 1)).map(([k, n]) => `${n} ${k}`).join(', ')
   $app.innerHTML = `
     <h2>Needs you</h2>
     <div class="needs">
@@ -180,22 +195,36 @@ function renderOverview() {
       ${needBox('Checks due', needs.due, r => `<li>${recLink(r)} · ${esc(r.agentName)} · due ${esc(r.checkAt)}</li>`, 'No task is past its checkAt')}
       ${needBox('Stuck tasks', needs.stuck, r => `<li>${recLink(r)} · ${esc(r.agentName)}</li>`, 'Nothing running over 14 days')}
     </div>
-    <h2>Agents · ${active.length} active${idle.length ? `, ${idle.length} idle` : ''}</h2>
-    <div class="grid">${[...active, ...idle].map(card).join('') || '<div class="empty">No agent folders in brain/agents/</div>'}</div>`
+    <h2>Schedule</h2>
+    ${scheduleTable(overview.schedule)}
+    <h2>Agents · ${tally}</h2>
+    <div class="grid">${sorted.map(card).join('') || '<div class="empty">No agent folders in brain/agents/</div>'}</div>`
+}
+
+function scheduleTable(rows) {
+  if (!rows.length) return '<div class="panel empty">No routines recorded in any agents/*/routines.md</div>'
+  return `<div class="panel table-wrap"><table>
+    <tr><th>Next run</th><th>Agent</th><th>Routine</th><th>When</th><th>Status</th></tr>
+    ${rows.map(r => `<tr class="click" onclick="location.hash='#/agent/${esc(r.agent)}/routines'">
+      <td style="white-space:nowrap">${r.active ? esc(fmtRun(r.nextRun)) : '<span style="color:var(--faint)">—</span>'}</td>
+      <td>${esc(r.agentName)}</td><td>${esc(r.name)}<div style="color:var(--faint);font-size:12px">${esc(r.loopJob.replace(/`/g, ''))}</div></td>
+      <td>${esc(r.plain)}</td><td>${statusChip(r.active ? 'active' : (r.status.split(/[ ,(]/)[0] || 'paused'))}</td></tr>`).join('')}
+  </table></div>`
 }
 
 function card(a) {
   const tc = a.taskCounts
   const open = (tc.todo || 0) + (tc.running || 0) + (tc.in_review || 0)
-  return `<div class="card ${a.status === 'idle' ? 'idle' : ''}" onclick="location.hash='#/agent/${esc(a.slug)}'">
+  return `<div class="card ${a.status === 'idle' || a.status === 'retired' ? 'idle' : ''}" onclick="location.hash='#/agent/${esc(a.slug)}'">
     <div class="card-top">${avatar(a)}<div><div class="card-title">${esc(a.name)}</div><div class="card-role">${esc(a.role || a.slug)}</div></div></div>
     <div class="chips">
-      ${a.status === 'idle' ? '<span class="chip">idle</span>' : '<span class="chip green">active</span>'}
+      ${statusBadge(a.status)}
       ${a.runtime ? `<span class="chip">${esc(a.runtime)}</span>` : ''}
       ${a.rung ? `<span class="chip accent" title="${esc(RUNG[a.rung] || '')}">rung ${esc(a.rung)}</span>` : ''}
       ${a.reportsTo ? `<span class="chip">→ ${esc(a.reportsTo)}</span>` : ''}
       ${a.metricSet ? '' : '<span class="chip amber">no success metric</span>'}
     </div>
+    <div class="routine-line">${routineLine(a)}</div>
     <div class="mission">${esc(a.mission.replace(/\*\*|`/g, ''))}</div>
     <div class="chips">${a.connections.map(c => `<span class="conn chip" title="${esc(c.detail)}"><span class="dot ${c.state}"></span>${esc(c.label)}</span>`).join('')}</div>
     <div class="stats">
@@ -213,13 +242,13 @@ async function renderAgent(slug, tab, filePath) {
   tab = filePath ? 'file' : (tab || 'overview')
   const r = a.records
   const tabs = [['overview', 'Overview'], ['tasks', 'Tasks', r.tasks.length], ['learnings', 'Learnings', r.learnings.length],
-    ['proposals', 'Proposals', r.proposals.length], ['activity', 'Activity'], ['files', 'Files', a.files.length]]
+    ['proposals', 'Proposals', r.proposals.length], ['routines', 'Routines', a.routines ? a.routines.routines.length : 0], ['activity', 'Activity'], ['files', 'Files', a.files.length]]
   $app.innerHTML = `
     <span class="back" onclick="location.hash=''">← All agents</span>
     <div class="detail-head">${avatar(a)}<div>
       <h1>${esc(a.name)}</h1><div class="card-role">${esc(a.role)}</div>
       <div class="meta-row">
-        ${a.status === 'idle' ? '<span class="chip">idle</span>' : '<span class="chip green">active</span>'}
+        ${statusBadge(a.status)}
         ${a.runtime ? `<span class="chip">${esc(a.runtime)}</span>` : ''}
         ${a.rung ? `<span class="chip accent">rung ${esc(a.rung)} · ${esc(RUNG[a.rung] || '')}</span>` : ''}
         ${a.owner ? `<span class="chip">owner ${esc(a.owner)}</span>` : ''}
@@ -256,6 +285,21 @@ async function renderAgent(slug, tab, filePath) {
         <td>${esc(x.title)}<div class="mono" style="color:var(--faint)">${esc(x.path)}</div></td><td>${statusChip(x.status)}</td>
         ${tab === 'tasks' ? `<td>${esc(x.priority)}</td>` : ''}<td>${esc(x.checkAt || '—')}</td><td>${esc(x.createdAt || x.modified.slice(0, 10))}</td></tr>`).join('')}
       </table></div>` : `<div class="panel empty">No ${tab} yet. They appear here when the agent writes to agents/${esc(slug)}/${tab}/</div>`
+  } else if (tab === 'routines') {
+    const R = a.routines
+    if (!R) { body.innerHTML = `<div class="panel empty">No routines.md yet. Each agent records its scheduled jobs in agents/${esc(slug)}/routines.md (template: agents/_templates/routines.md)</div>`; return }
+    body.innerHTML = `
+      <div class="panel table-wrap" style="margin-bottom:16px">
+        <div style="color:var(--muted);font-size:12px;margin-bottom:8px">Recorded in routines.md, updated ${esc(R.updatedAt || '?')}. The runtime holds the live copy; this is what was last written to brain.</div>
+        <table><tr><th>Routine</th><th>Schedule</th><th>Window</th><th>Status</th><th>Next run</th></tr>
+        ${R.routines.map(x => `<tr><td>${esc(x.name)}<div class="mono" style="color:var(--faint)">${esc(x.id)}</div></td>
+          <td>${esc(x.plain)}<div class="mono" style="color:var(--faint)">${esc(x.cron)}</div></td><td>${esc(x.window)}</td>
+          <td>${statusChip(x.active ? 'active' : 'paused')}<div style="color:var(--faint);font-size:12px">${esc(x.active || x.status.toLowerCase() === 'paused' ? '' : x.status)}</div></td>
+          <td style="white-space:nowrap">${x.active ? esc(fmtRun(x.nextRun)) : '—'}</td></tr>`).join('') || '<tr><td colspan="5" class="empty">No routines</td></tr>'}
+        </table></div>
+      ${R.routines.filter(x => x.prompt).map(x => `<details class="panel" style="margin-bottom:10px"><summary style="cursor:pointer;font-weight:500">Prompt: ${esc(x.name)}</summary>
+        <pre class="mono" style="white-space:pre-wrap;margin:12px 0 0;color:#c9cfdb">${esc(x.prompt)}</pre></details>`).join('')}
+      ${R.changelog.length ? `<div class="panel" style="margin-top:16px"><h3>Change log</h3><div class="md">${md(R.changelog.map(l => '- ' + l).join('\n'))}</div></div>` : ''}`
   } else if (tab === 'files') {
     body.innerHTML = `<div class="panel">${a.files.map(f => `<div style="padding:6px 0;border-bottom:1px solid var(--line)">
       <a class="mono" href="#/agent/${esc(slug)}/file/${encodeURIComponent(f)}">${esc(f)}</a></div>`).join('') || '<div class="empty">No files</div>'}</div>`

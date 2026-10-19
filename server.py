@@ -32,6 +32,7 @@ LOGS_READ_KEY = os.environ.get("SUPABASE_LOGS_READ_KEY", "")
 
 RECORD_KINDS = ("tasks", "learnings", "proposals")
 STUCK_AFTER_DAYS = 14
+ROUTINE_TZ = "America/Los_Angeles"  # routines.md records schedules in PT
 
 
 # ── Parsing ────────────────────────────────────────────────────────────────
@@ -127,6 +128,127 @@ def load_records(adir, kind):
     return out
 
 
+# ── Routines (agents/<name>/routines.md) ───────────────────────────────────
+
+def _cron_field(spec, lo, hi):
+    """Expand one cron field ('*', '1-5', '*/15', '1,3,5') into a set of ints."""
+    out = set()
+    for part in spec.split(","):
+        step = 1
+        if "/" in part:
+            part, step = part.split("/", 1)
+            step = int(step)
+        if part == "*":
+            a, b = lo, hi
+        elif "-" in part:
+            a, b = (int(x) for x in part.split("-", 1))
+        else:
+            a = b = int(part)
+        out.update(range(a, b + 1, step))
+    return out
+
+
+def next_cron_run(expr, after):
+    """Next datetime (in after's tz) matching a 5-field cron expression, or None."""
+    try:
+        f = expr.split()
+        minutes, hours = _cron_field(f[0], 0, 59), _cron_field(f[1], 0, 23)
+        doms, months = _cron_field(f[2], 1, 31), _cron_field(f[3], 1, 12)
+        dows = {d % 7 for d in _cron_field(f[4], 0, 7)}  # 0 and 7 are Sunday
+    except (IndexError, ValueError):
+        return None
+    dom_any, dow_any = f[2] == "*", f[4] == "*"
+    day = after.replace(hour=0, minute=0, second=0, microsecond=0)
+    for _ in range(400):
+        cron_dow = (day.weekday() + 1) % 7
+        dom_ok, dow_ok = day.day in doms, cron_dow in dows
+        day_ok = (dom_ok and dow_ok) if (dom_any or dow_any) else (dom_ok or dow_ok)
+        if day.month in months and day_ok:
+            for h in sorted(hours):
+                for m in sorted(minutes):
+                    cand = day.replace(hour=h, minute=m)
+                    if cand > after:
+                        return cand
+        day = (day + timedelta(days=1)).replace(hour=0, minute=0)
+    return None
+
+
+def parse_table(text, must_have):
+    """First markdown table whose header contains `must_have` → list of {header: cell}."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if line.startswith("|") and must_have.lower() in line.lower() and i + 1 < len(lines) and re.match(r"^\|[\s:|-]+\|$", lines[i + 1]):
+            heads = [h.strip() for h in line.strip("|").split("|")]
+            rows = []
+            for row in lines[i + 2:]:
+                if not row.startswith("|"):
+                    break
+                cells = [c.strip() for c in row.strip("|").split("|")]
+                rows.append(dict(zip(heads, cells)))
+            return rows
+    return []
+
+
+def load_routines(adir):
+    path = adir / "routines.md"
+    if not path.is_file():
+        return None
+    meta, body = parse_frontmatter(read_text(path))
+    _, sections = split_sections(body)
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo(ROUTINE_TZ))
+    except Exception:
+        now = datetime.now()
+
+    def col(row, *keys):
+        for h, v in row.items():
+            if any(k in h.lower() for k in keys):
+                return v
+        return ""
+
+    routines = []
+    for row in parse_table(body, "routine id"):
+        name = row.get("Name", "")
+        rid = col(row, "routine id").strip("`")
+        sched = col(row, "cron", "schedule")
+        plain = col(row, "plain")
+        if " · " in sched:  # one combined column: "`cron` · weekdays 8:30 AM PT"
+            combined = sched
+            sched, rest = sched.split(" · ", 1)
+            if not plain or plain == combined:
+                plain = rest
+        cron = sched.strip().strip("`")
+        cron = re.sub(r"^CRON_TZ=\S+\s+", "", cron)
+        status = col(row, "status")
+        active = status.lower().startswith("active")
+
+        # The routine's own section: heading starts with its name or mentions its id.
+        prompt, section_title = "", ""
+        for title, text in sections.items():
+            if title.startswith(name) or (rid and rid in title):
+                m = re.search(r"```(?:text)?\n(.*?)```", text, re.S)
+                prompt, section_title = (m.group(1).strip() if m else ""), title
+                break
+
+        nxt = next_cron_run(cron, now) if active else None
+        routines.append({
+            "name": name, "id": rid, "cron": cron, "plain": plain,
+            "window": col(row, "timing", "window"), "status": status, "active": active,
+            "loopJob": col(row, "loop"), "prompt": prompt,
+            "nextRun": nxt.isoformat(timespec="minutes") if nxt else "",
+        })
+
+    changelog = [l[2:].strip() for l in sections.get("Change log", "").splitlines() if l.startswith("- ")]
+    return {
+        "status": (meta.get("status") or "").lower(),
+        "updatedAt": meta.get("updatedAt", ""),
+        "routines": routines,
+        "changelog": changelog,
+        "notes": {k: v for k, v in sections.items() if k in ("Legacy",)},
+    }
+
+
 def runtime_connection(runtime, runtime_id):
     """What this server can actually see of the agent's runtime."""
     rt = (runtime or "").lower()
@@ -155,8 +277,11 @@ def summarize_agent(adir, today):
     title, sections = split_sections(body)
     mission = first_paragraph(sections.get("Mission", ""))
 
-    # Explicit `status:` in agent.md wins; otherwise infer idle from the mission text.
-    status = (meta.get("status") or "").lower()
+    routines = load_routines(adir)
+
+    # Status: agent.md `status:` wins, then routines.md's (the agent as a whole), then a
+    # guess from the mission text.
+    status = (meta.get("status") or (routines or {}).get("status") or "").lower()
     if not status:
         status = "idle" if re.search(r"\bidle\b", mission, re.I) else "active"
 
@@ -181,6 +306,10 @@ def summarize_agent(adir, today):
         {"key": "soul", "label": "SOUL.md",
          "state": "linked" if (adir / "SOUL.md").is_file() else "missing",
          "detail": "Versioned in brain" if (adir / "SOUL.md").is_file() else "No SOUL.md in brain yet"},
+        {"key": "routines", "label": "Routines",
+         "state": "linked" if routines is not None else "missing",
+         "detail": (f"routines.md: {len(routines['routines'])} recorded, updated {routines['updatedAt'] or '?'}"
+                    if routines is not None else "No routines.md yet")},
         {"key": "evals", "label": "Evals",
          "state": "linked" if (adir / "evals").is_dir() else "missing",
          "detail": "evals/ present" if (adir / "evals").is_dir() else "No eval suite yet"},
@@ -212,6 +341,7 @@ def summarize_agent(adir, today):
         "pendingProposals": pending,
         "activeLearnings": len(active_learnings),
         "connections": connections,
+        "routines": routines,
         "_records": records,
         "_sections": sections,
     }
@@ -306,14 +436,20 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path == "/api/overview":
             agents = [summarize_agent(d, today) for d in agent_dirs()]
             needs = {"due": [], "stuck": [], "proposals": []}
+            schedule = []
             for a in agents:
                 for key, src in (("due", "due"), ("stuck", "stuck"), ("proposals", "pendingProposals")):
                     needs[key] += [dict(r, agent=a["slug"], agentName=a["name"]) for r in a[src]]
+                for r in (a["routines"] or {}).get("routines", []):
+                    schedule.append({k: r[k] for k in ("name", "id", "plain", "status", "active", "nextRun", "loopJob")}
+                                    | {"agent": a["slug"], "agentName": a["name"]})
+            schedule.sort(key=lambda r: (not r["active"], r["nextRun"] or "9999"))
             self._json(200, {
                 "today": today.isoformat(),
                 "brain": brain_git(),
                 "agents": [public(a) for a in agents],
                 "needs": needs,
+                "schedule": schedule,
                 "activityConnected": bool(LOGS_URL and LOGS_READ_KEY),
             })
 
@@ -322,7 +458,7 @@ class Handler(BaseHTTPRequestHandler):
             if not arg("slug") or arg("slug").startswith((".", "_")) or not adir.is_dir():
                 return self._json(404, {"error": "agent not found"})
             a = summarize_agent(adir, today)
-            files = [f for f in ("agent.md", "SOUL.md") if (adir / f).is_file()]
+            files = [f for f in ("agent.md", "SOUL.md", "routines.md") if (adir / f).is_file()]
             if (adir / "evals").is_dir():
                 files += [str(f.relative_to(adir)) for f in sorted((adir / "evals").glob("*.md"))]
             self._json(200, dict(public(a), sections=a["_sections"], records=a["_records"], files=files))
