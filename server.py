@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Agent Hub: a read-only dashboard over brain/agents/.
+"""Agent Hub: a read-only dashboard over brain/agents/ and brain's pull requests.
 
 Every folder in brain/agents/ (except _templates) is an agent. Nothing about the agents
 is hardcoded here: names, runtimes, records and connection state are all read from disk
@@ -374,6 +374,42 @@ def brain_git():
     return info
 
 
+# ── Pull requests (brain on GitHub, via the gh CLI logged in on this server) ──
+
+PR_FIELDS = ("number,title,body,state,isDraft,url,headRefName,createdAt,updatedAt,mergedAt,"
+             "closedAt,additions,deletions,changedFiles,files,mergeable,mergeStateStatus,reviewDecision")
+PR_CACHE_SECONDS = 60
+_pr_cache = {"at": 0.0, "data": None}
+
+
+def pr_agent(branch):
+    """Bots name branches bot/<name>/..., <name>/... or <name>-...; all PRs are opened
+    under the same GitHub account, so the branch is the only reliable author."""
+    m = re.match(r"(?:bot/)?([a-z][a-z0-9]*)(?:[/-]|$)", branch or "")
+    return m.group(1) if m else ""
+
+
+def fetch_prs(force=False):
+    now = datetime.now().timestamp()
+    if not force and _pr_cache["data"] and now - _pr_cache["at"] < PR_CACHE_SECONDS:
+        return _pr_cache["data"]
+    def gh(state, limit):
+        out = subprocess.run(["gh", "pr", "list", "--state", state, "--limit", str(limit), "--json", PR_FIELDS],
+                             cwd=BRAIN, capture_output=True, text=True, timeout=30)
+        if out.returncode:
+            raise RuntimeError(out.stderr.strip() or f"gh exited {out.returncode}")
+        return json.loads(out.stdout)
+    try:
+        prs = gh("open", 50) + [p for p in gh("all", 30) if p["state"] != "OPEN"]
+    except (OSError, subprocess.SubprocessError, RuntimeError, ValueError) as e:
+        return {"error": f"{type(e).__name__}: {e}", "prs": []}
+    for p in prs:
+        p["agent"] = pr_agent(p["headRefName"])
+    data = {"prs": prs, "fetchedAt": datetime.now().isoformat(timespec="seconds")}
+    _pr_cache.update(at=now, data=data)
+    return data
+
+
 # ── Activity log ───────────────────────────────────────────────────────────
 
 def fetch_activity(agent_name, limit=50):
@@ -471,6 +507,9 @@ class Handler(BaseHTTPRequestHandler):
 
         elif url.path == "/api/activity":
             self._json(200, fetch_activity(arg("agent")))
+
+        elif url.path == "/api/prs":
+            self._json(200, fetch_prs(force=arg("refresh") == "1"))
 
         else:
             self._json(404, {"error": "not found"})
