@@ -11,7 +11,9 @@ Run: python3 server.py   (HOST/PORT/BRAIN_DIR overridable via environment)
 import json
 import os
 import re
+import shutil
 import subprocess
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -440,6 +442,7 @@ DRIVE_SA_FILE = Path(os.environ.get("DRIVE_SA_FILE", BRAIN / "credentials" / "go
 VIDEO_COLUMNS = ("id,created_at,updated_at,agent_name,business,account,product,stage,title,drive_file_id,"
                  "airtable_base,airtable_table,airtable_record_id,clickup_task_id,run_id,notes,status,"
                  "reviewed_at,reviewer_note")
+THUMB_DIR = HUB_DIR / ".cache" / "thumbs"
 _drive = {"creds": None}
 _thumbs = {}
 
@@ -496,6 +499,28 @@ def drive_open(file_id, range_header=None):
     return urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30)
 
 
+def frame_grab(file_id):
+    """Drive makes no thumbnail for files it doesn't see as video (e.g. uploaded as
+    application/mp4), so take a frame ourselves and keep it on disk. The file is
+    downloaded first: the static ffmpeg build on this server crashes reading https."""
+    cached = THUMB_DIR / f"{file_id}.jpg"
+    if cached.is_file():
+        return cached.read_bytes()
+    ffmpeg = shutil.which("ffmpeg") or str(Path.home() / ".local" / "bin" / "ffmpeg")
+    with tempfile.NamedTemporaryFile(suffix=".mp4") as tmp:
+        with drive_open(file_id) as src:
+            shutil.copyfileobj(src, tmp)
+        tmp.flush()
+        out = subprocess.run([ffmpeg, "-v", "error", "-ss", "0.5", "-i", tmp.name, "-frames:v", "1",
+                              "-vf", "scale=360:-2", "-q:v", "4", "-f", "image2", "pipe:1"],
+                             capture_output=True, timeout=60)
+    if out.returncode or not out.stdout:
+        return None
+    THUMB_DIR.mkdir(parents=True, exist_ok=True)
+    cached.write_bytes(out.stdout)
+    return out.stdout
+
+
 def drive_thumbnail(file_id):
     if file_id in _thumbs:
         return _thumbs[file_id]
@@ -503,11 +528,15 @@ def drive_thumbnail(file_id):
     meta_url = f"https://www.googleapis.com/drive/v3/files/{file_id}?fields=thumbnailLink&supportsAllDrives=true"
     with urllib.request.urlopen(urllib.request.Request(meta_url, headers={"Authorization": f"Bearer {token}"}), timeout=15) as r:
         link = json.loads(r.read().decode()).get("thumbnailLink")
-    if not link:
-        return None
-    link = re.sub(r"=s\d+$", "=s640", link)
-    with urllib.request.urlopen(urllib.request.Request(link, headers={"Authorization": f"Bearer {token}"}), timeout=15) as r:
-        thumb = (r.read(), r.headers.get("Content-Type", "image/jpeg"))
+    if link:
+        link = re.sub(r"=s\d+$", "=s640", link)
+        with urllib.request.urlopen(urllib.request.Request(link, headers={"Authorization": f"Bearer {token}"}), timeout=15) as r:
+            thumb = (r.read(), r.headers.get("Content-Type", "image/jpeg"))
+    else:
+        jpg = frame_grab(file_id)
+        if not jpg:
+            return None
+        thumb = (jpg, "image/jpeg")
     _thumbs[file_id] = thumb
     return thumb
 
@@ -552,9 +581,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(502, {"error": f"{type(e).__name__}: {e}"})
         with src:
             self.send_response(src.status)
-            for h in ("Content-Type", "Content-Length", "Content-Range"):
+            for h in ("Content-Length", "Content-Range"):
                 if src.headers.get(h):
                     self.send_header(h, src.headers[h])
+            ctype = src.headers.get("Content-Type", "")
+            # Uploads typed application/mp4 or octet-stream are still MP4 video
+            self.send_header("Content-Type", ctype if ctype.startswith("video/") else "video/mp4")
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Cache-Control", "private, max-age=3600")
             self.end_headers()
