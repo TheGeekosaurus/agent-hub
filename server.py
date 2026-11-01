@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Agent Hub: a read-only dashboard over brain/agents/ and brain's pull requests.
+"""Agent Hub: a read-only dashboard over brain/agents/, brain's pull requests and the video review queue.
 
 Every folder in brain/agents/ (except _templates) is an agent. Nothing about the agents
 is hardcoded here: names, runtimes, records and connection state are all read from disk
@@ -12,6 +12,7 @@ import json
 import os
 import re
 import subprocess
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta
@@ -430,6 +431,87 @@ def fetch_activity(agent_name, limit=50):
         return {"connected": True, "rows": [], "error": f"{type(e).__name__}: {e}"}
 
 
+# ── Video reviews (video_reviews in the same Supabase project; files stay in Drive) ──
+# Bots add a row per video with the submit_video_for_review RPC
+# (brain knowledge/agent-building/video-reviews.md). The hub reads rows with the logs read
+# key and streams each file from Drive with the service account, so nothing is copied.
+
+DRIVE_SA_FILE = Path(os.environ.get("DRIVE_SA_FILE", BRAIN / "credentials" / "google-drive-sa.json"))
+VIDEO_COLUMNS = ("id,created_at,updated_at,agent_name,business,account,product,stage,title,drive_file_id,"
+                 "airtable_base,airtable_table,airtable_record_id,clickup_task_id,run_id,notes,status,"
+                 "reviewed_at,reviewer_note")
+_drive = {"creds": None}
+_thumbs = {}
+
+
+def supabase_get(table, params):
+    q = urllib.parse.urlencode(params)
+    req = urllib.request.Request(f"{LOGS_URL}/rest/v1/{table}?{q}", headers={
+        "apikey": LOGS_READ_KEY, "Authorization": f"Bearer {LOGS_READ_KEY}"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read().decode())
+
+
+def fetch_videos(limit=300):
+    if not (LOGS_URL and LOGS_READ_KEY):
+        return {"connected": False, "videos": []}
+    try:
+        rows = supabase_get("video_reviews", {"select": VIDEO_COLUMNS, "order": "created_at.desc", "limit": str(limit)})
+        return {"connected": True, "videos": rows}
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        missing = e.code == 404 or "PGRST205" in body or "42P01" in body
+        return {"connected": True, "videos": [], "missingTable": missing, "error": f"HTTP {e.code}: {body[:300]}"}
+    except Exception as e:
+        return {"connected": True, "videos": [], "error": f"{type(e).__name__}: {e}"}
+
+
+def video_in_queue(file_id):
+    """The stream/thumb endpoints only serve Drive files a bot put in the review queue."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{10,}", file_id or "") or not (LOGS_URL and LOGS_READ_KEY):
+        return False
+    try:
+        return bool(supabase_get("video_reviews", {"select": "id", "drive_file_id": f"eq.{file_id}", "limit": "1"}))
+    except Exception:
+        return False
+
+
+def drive_token():
+    from google.oauth2 import service_account          # optional dependency: only the video
+    import google.auth.transport.requests as gtr       # pages need it
+    c = _drive["creds"]
+    if c is None:
+        c = _drive["creds"] = service_account.Credentials.from_service_account_file(
+            str(DRIVE_SA_FILE), scopes=["https://www.googleapis.com/auth/drive.readonly"])
+    if not c.valid:
+        c.refresh(gtr.Request())
+    return c.token
+
+
+def drive_open(file_id, range_header=None):
+    headers = {"Authorization": f"Bearer {drive_token()}"}
+    if range_header:
+        headers["Range"] = range_header
+    url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media&supportsAllDrives=true"
+    return urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30)
+
+
+def drive_thumbnail(file_id):
+    if file_id in _thumbs:
+        return _thumbs[file_id]
+    token = drive_token()
+    meta_url = f"https://www.googleapis.com/drive/v3/files/{file_id}?fields=thumbnailLink&supportsAllDrives=true"
+    with urllib.request.urlopen(urllib.request.Request(meta_url, headers={"Authorization": f"Bearer {token}"}), timeout=15) as r:
+        link = json.loads(r.read().decode()).get("thumbnailLink")
+    if not link:
+        return None
+    link = re.sub(r"=s\d+$", "=s640", link)
+    with urllib.request.urlopen(urllib.request.Request(link, headers={"Authorization": f"Bearer {token}"}), timeout=15) as r:
+        thumb = (r.read(), r.headers.get("Content-Type", "image/jpeg"))
+    _thumbs[file_id] = thumb
+    return thumb
+
+
 # ── HTTP ───────────────────────────────────────────────────────────────────
 
 def resolve_agent_file(slug, rel):
@@ -459,6 +541,28 @@ class Handler(BaseHTTPRequestHandler):
 
     def _json(self, code, data):
         self._send(code, json.dumps(data).encode(), "application/json")
+
+    def stream_drive(self, file_id):
+        """Pass the browser's Range through to Drive so the player can seek."""
+        try:
+            src = drive_open(file_id, self.headers.get("Range"))
+        except urllib.error.HTTPError as e:
+            return self._json(e.code if e.code in (404, 416) else 502, {"error": f"Drive HTTP {e.code}"})
+        except Exception as e:
+            return self._json(502, {"error": f"{type(e).__name__}: {e}"})
+        with src:
+            self.send_response(src.status)
+            for h in ("Content-Type", "Content-Length", "Content-Range"):
+                if src.headers.get(h):
+                    self.send_header(h, src.headers[h])
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", "private, max-age=3600")
+            self.end_headers()
+            try:
+                while chunk := src.read(256 * 1024):
+                    self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the player cancels ranges it no longer needs
 
     def do_GET(self):
         url = urllib.parse.urlparse(self.path)
@@ -510,6 +614,25 @@ class Handler(BaseHTTPRequestHandler):
 
         elif url.path == "/api/prs":
             self._json(200, fetch_prs(force=arg("refresh") == "1"))
+
+        elif url.path == "/api/videos":
+            self._json(200, fetch_videos())
+
+        elif url.path == "/api/video-thumb":
+            if not video_in_queue(arg("id")):
+                return self._json(404, {"error": "not in the review queue"})
+            try:
+                thumb = drive_thumbnail(arg("id"))
+            except Exception as e:
+                return self._json(502, {"error": f"{type(e).__name__}: {e}"})
+            if not thumb:
+                return self._json(404, {"error": "Drive has no thumbnail yet"})
+            self._send(200, *thumb)
+
+        elif url.path == "/api/video-stream":
+            if not video_in_queue(arg("id")):
+                return self._json(404, {"error": "not in the review queue"})
+            self.stream_drive(arg("id"))
 
         else:
             self._json(404, {"error": "not found"})

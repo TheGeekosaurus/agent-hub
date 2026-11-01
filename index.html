@@ -173,7 +173,24 @@
   @media (max-width: 760px) { .pr-main { flex-wrap: wrap; } .pr-side { flex-direction: row; align-items: center; width: 100%; padding-left: 48px; }
     .pr-detail { grid-template-columns: minmax(0, 1fr); } }
 
-  @media (max-width: 600px) { main { padding: 16px; }
+  /* Videos */
+  .vids { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+  .vid { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+  .vid-frame { position: relative; aspect-ratio: 9 / 16; background: #000; cursor: pointer; display: grid; place-items: center; }
+  .vid-frame img, .vid-frame video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+  .vid-frame .play { position: relative; width: 52px; height: 52px; border-radius: 50%; background: rgba(11,14,20,.65);
+    border: 1px solid rgba(255,255,255,.25); display: grid; place-items: center; transition: transform .15s; }
+  .vid-frame:hover .play { transform: scale(1.08); }
+  .vid-frame .play svg { width: 20px; height: 20px; margin-left: 3px; fill: #fff; }
+  .vid-frame .noposter { position: absolute; bottom: 10px; font-size: 11px; color: var(--faint); }
+  .vid-info { padding: 12px 14px; display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+  .vid-title { font-weight: 600; font-size: 13.5px; overflow-wrap: anywhere; }
+  .vid-meta { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+  .vid-note { color: #c9cfdb; font-size: 12px; background: var(--panel-2); border-radius: 8px; padding: 7px 9px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .vid-note.review { border-left: 2px solid var(--amber); }
+  .vid-links { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; }
+
+  @media (max-width: 600px) { main { padding: 16px; } .vids { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
     .grid, .needs { grid-template-columns: minmax(0, 1fr); } .pr-side { padding-left: 0; } }
   .brain-status { min-width: 0; overflow-wrap: anywhere; }
 </style>
@@ -188,6 +205,9 @@
   <a class="nav-item" data-page="prs" href="#/prs">
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="4" cy="3.5" r="1.75"/><circle cx="4" cy="12.5" r="1.75"/><circle cx="12" cy="12.5" r="1.75"/><path d="M4 5.25v5.5M12 10.75V6.5a2 2 0 0 0-2-2H7.5M9 3l-1.5 1.5L9 6"/></svg>
     Pull requests<span class="badge" id="pr-badge" title="Open brain PRs"></span></a>
+  <a class="nav-item" data-page="videos" href="#/videos">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="1.75" y="3.25" width="9" height="9.5" rx="1.5"/><path d="M10.75 6.75l3.5-2v6.5l-3.5-2z"/></svg>
+    Videos<span class="badge" id="video-badge" title="Videos waiting for review"></span></a>
   <div class="nav-sep">Consoles</div>
   <a class="nav-item ext" href="http://localhost:18792" target="_blank" rel="noopener">OpenClaw ↗</a>
   <a class="nav-item ext" href="http://localhost:9119" target="_blank" rel="noopener">Hermes ↗</a>
@@ -271,6 +291,7 @@ function renderOverview() {
       ${needBox('Checks due', needs.due, r => `<li>${recLink(r)} · ${esc(r.agentName)} · due ${esc(r.checkAt)}</li>`, 'No task is past its checkAt')}
       ${needBox('Stuck tasks', needs.stuck, r => `<li>${recLink(r)} · ${esc(r.agentName)}</li>`, 'Nothing running over 14 days')}
       <div class="need" id="need-prs"><div class="head"><b>Brain PRs to merge</b><span class="n">…</span></div></div>
+      <div class="need" id="need-videos"><div class="head"><b>Videos to review</b><span class="n">…</span></div></div>
     </div>
     <h2>Agents · ${tally}</h2>
     <div class="grid">${sorted.map(card).join('') || '<div class="empty">No agent folders in brain/agents/</div>'}</div>
@@ -508,10 +529,98 @@ async function renderPRs(filter, force) {
   document.getElementById('pr-refresh').onclick = () => renderPRs(filter, true)
 }
 
+// ── Videos (review queue) ──────────────────────────────────────────────
+const VIDEO_STATUSES = [['pending', 'To review'], ['approved', 'Approved'], ['changes_requested', 'Changes requested'], ['rejected', 'Rejected'], ['all', 'All']]
+const VIDEO_CHIP = { pending: 'amber', approved: 'green', rejected: 'red', changes_requested: 'amber' }
+const PLAY_ICON = '<svg viewBox="0 0 16 16"><path d="M3 1.8v12.4L13.5 8z"/></svg>'
+
+async function loadVideos() {
+  const data = await getJSON('/api/videos')
+  document.getElementById('video-badge').textContent = data.videos.filter(v => v.status === 'pending').length || ''
+  return data
+}
+
+async function fillVideoNeed() {
+  const box = document.getElementById('need-videos')
+  try {
+    const data = await loadVideos()
+    if (!document.body.contains(box)) return
+    const pending = data.videos.filter(v => v.status === 'pending')
+    box.outerHTML = needBox('Videos to review', pending,
+      v => `<li><a href="#/videos">${esc(v.title)}</a> · ${esc(v.account || v.agent_name)} · ${ago(v.created_at)}</li>`,
+      data.missingTable ? 'Review queue not set up yet' : 'Nothing waiting')
+  } catch (e) { if (box) box.querySelector('.n').textContent = '?' }
+}
+
+function videoCard(v) {
+  const id = esc(v.drive_file_id)
+  const airtable = v.airtable_base && v.airtable_table && v.airtable_record_id
+    ? `https://airtable.com/${encodeURIComponent(v.airtable_base)}/${encodeURIComponent(v.airtable_table)}/${encodeURIComponent(v.airtable_record_id)}` : ''
+  return `<div class="vid">
+    <div class="vid-frame" data-id="${id}" title="Play">
+      <span class="noposter">no preview yet</span>
+      <img src="/api/video-thumb?id=${id}" alt="" loading="lazy" onerror="this.remove()">
+      <span class="play">${PLAY_ICON}</span>
+    </div>
+    <div class="vid-info">
+      <div class="vid-title">${esc(v.title)}</div>
+      <div class="chips">
+        <span class="chip ${VIDEO_CHIP[v.status] || ''}">${esc((v.status || '').replace('_', ' '))}</span>
+        <span class="chip">${esc(v.stage)}</span>
+      </div>
+      <div class="vid-meta">${[v.account, v.product].filter(Boolean).map(esc).join(' · ') || esc(v.business || '')}</div>
+      <div class="vid-meta"><span class="dot" style="background:${colorFor((v.agent_name || '').toLowerCase())}"></span> ${esc(v.agent_name)} · ${ago(v.created_at)}</div>
+      ${v.notes ? `<div class="vid-note">${esc(v.notes)}</div>` : ''}
+      ${v.reviewer_note ? `<div class="vid-note review">${esc(v.reviewer_note)}</div>` : ''}
+      <div class="vid-links">
+        <a href="https://drive.google.com/file/d/${id}/view" target="_blank" rel="noopener">Drive ↗</a>
+        ${airtable ? `<a href="${esc(airtable)}" target="_blank" rel="noopener">Airtable ↗</a>` : ''}
+        ${v.clickup_task_id ? `<a href="https://app.clickup.com/t/${esc(v.clickup_task_id)}" target="_blank" rel="noopener">ClickUp ↗</a>` : ''}
+      </div>
+    </div>
+  </div>`
+}
+
+async function renderVideos(status, account) {
+  status = status || 'pending'
+  $app.innerHTML = '<div class="empty">Loading videos…</div>'
+  let data
+  try { data = await loadVideos() } catch (e) { $app.innerHTML = `<div class="empty err">${esc(e.message)}</div>`; return }
+  const head = `<div class="page-head"><div><h1>Videos</h1>
+    <div class="sub">Videos the bots put up for review. Files stay in Drive and play from there.</div></div></div>`
+  if (!data.connected || data.missingTable) {
+    $app.innerHTML = `${head}<div class="notice">The review queue isn't set up yet. Run the SQL in
+      <code>knowledge/agent-building/video-reviews.md</code> in the Supabase SQL editor for the agents project,
+      then have the bots submit videos with <code>submit_video_for_review</code>.</div>`
+    return
+  }
+  if (data.error) { $app.innerHTML = `${head}<div class="panel err">Couldn't read the review queue: ${esc(data.error)}</div>`; return }
+  const all = data.videos
+  const byStatus = status === 'all' ? all : all.filter(v => v.status === status)
+  const accounts = Object.entries(byStatus.reduce((t, v) => (t[v.account || 'other'] = (t[v.account || 'other'] || 0) + 1, t), {}))
+  const shown = account ? byStatus.filter(v => (v.account || 'other') === account) : byStatus
+  const count = s => s === 'all' ? all.length : all.filter(v => v.status === s).length
+  $app.innerHTML = `${head}
+    <div class="tabs">${VIDEO_STATUSES.map(([k, label]) =>
+      `<div class="tab ${k === status ? 'on' : ''}" onclick="location.hash='#/videos/${k}'">${label}<span class="count">${count(k)}</span></div>`).join('')}</div>
+    ${accounts.length > 1 ? `<div class="filters">
+      <a class="chip ${account ? '' : 'on'}" href="#/videos/${status}">All accounts · ${byStatus.length}</a>
+      ${accounts.sort((x, y) => y[1] - x[1]).map(([a, n]) =>
+        `<a class="chip ${account === a ? 'on' : ''}" href="#/videos/${status}/${encodeURIComponent(a)}">${esc(a)} · ${n}</a>`).join('')}</div>` : ''}
+    ${shown.length ? `<div class="vids">${shown.map(videoCard).join('')}</div>`
+      : `<div class="panel empty">${status === 'pending' ? 'Nothing waiting for review.' : 'No videos here.'}</div>`}`
+  $app.querySelectorAll('.vid-frame').forEach(f => f.addEventListener('click', () => {
+    if (f.querySelector('video')) return
+    $app.querySelectorAll('.vid-frame video').forEach(other => other.pause())
+    f.innerHTML = `<video src="/api/video-stream?id=${encodeURIComponent(f.dataset.id)}" controls autoplay playsinline></video>`
+    f.removeAttribute('title')
+  }))
+}
+
 // ── Router ─────────────────────────────────────────────────────────────
 async function route() {
   const parts = location.hash.replace(/^#\/?/, '').split('/')
-  const page = parts[0] === 'prs' ? 'prs' : 'agents'
+  const page = ['prs', 'videos'].includes(parts[0]) ? parts[0] : 'agents'
   document.querySelectorAll('.nav-item[data-page]').forEach(n => n.classList.toggle('on', n.dataset.page === page))
   try {
     overview = await getJSON('/api/overview')
@@ -519,11 +628,15 @@ async function route() {
   } catch (e) { $app.innerHTML = `<div class="empty err">Can't reach the hub server: ${esc(e.message)}</div>`; return }
   if (page === 'prs') {
     await renderPRs(parts[1] ? decodeURIComponent(parts[1]) : '')
+    loadVideos().catch(() => {})
+  } else if (page === 'videos') {
+    await renderVideos(parts[1], parts[2] ? decodeURIComponent(parts[2]) : '')
+    loadPRs().catch(() => {})
   } else if (parts[0] === 'agent' && parts[1]) {
     const filePath = parts[2] === 'file' ? decodeURIComponent(parts.slice(3).join('/')) : null
     await renderAgent(parts[1], filePath ? null : parts[2], filePath)
-  } else { renderOverview(); fillPRNeed() }
-  if (page === 'agents' && parts[0] === 'agent') loadPRs().catch(() => {})
+    loadPRs().catch(() => {}); loadVideos().catch(() => {})
+  } else { renderOverview(); fillPRNeed(); fillVideoNeed() }
   $app.classList.toggle('wide', !(parts[0] === 'agent' && parts[1]))
   window.scrollTo(0, 0)
 }

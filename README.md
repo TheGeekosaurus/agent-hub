@@ -13,3 +13,7 @@ on the same port, so the Windows tunnel needs no change.
 - Pull requests page reads brain's PRs with the `gh` CLI logged in on this server (cached 60s).
   The agent is taken from the branch name (`bot/<name>/…`, `<name>/…`, `<name>-…`), since every
   bot opens PRs under the same GitHub account. Merging stays on GitHub.
+- Videos page reads `video_reviews` (same Supabase project and read key as the Activity tab)
+  and streams each file from Drive with `brain/credentials/google-drive-sa.json` (override with
+  `DRIVE_SA_FILE`). Only files that are in the queue are served. Setup and the bots' submit RPC:
+  brain `knowledge/agent-building/video-reviews.md`.
