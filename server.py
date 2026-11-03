@@ -433,6 +433,32 @@ def fetch_activity(agent_name, limit=50):
         return {"connected": True, "rows": [], "error": f"{type(e).__name__}: {e}"}
 
 
+_log_writers = {"at": 0.0, "names": []}   # the allowlist, for the Logs page filter; refreshed every 5 min
+LOG_COLUMNS = ("id,created_at,agent_name,business,client,action,result,status,task_description,details,link,"
+               "run_id,clickup_task_id,model_used")
+
+
+def fetch_logs(agent="", before="", before_id="", limit=60):
+    """All agents' log rows, newest first. Paged by (created_at, id) so rows written while
+    someone scrolls don't shift the next page."""
+    if not (LOGS_URL and LOGS_READ_KEY):
+        return {"connected": False, "rows": [], "agents": []}
+    params = {"select": LOG_COLUMNS, "order": "created_at.desc,id.desc", "limit": str(limit)}
+    if agent:
+        params["agent_name"] = f"eq.{agent}"
+    if before and before_id:
+        params["or"] = f"(created_at.lt.{before},and(created_at.eq.{before},id.lt.{before_id}))"
+    try:
+        rows = supabase_get("agent_logs", params)
+        now = datetime.now().timestamp()
+        if now - _log_writers["at"] > 300:
+            _log_writers.update(at=now, names=[r["agent_name"] for r in supabase_get(
+                "agent_log_writers", {"select": "agent_name", "order": "agent_name"})])
+        return {"connected": True, "rows": rows, "agents": _log_writers["names"], "more": len(rows) == limit}
+    except Exception as e:  # report, don't crash the page
+        return {"connected": True, "rows": [], "agents": [], "error": f"{type(e).__name__}: {e}"}
+
+
 # ── Video reviews (video_reviews in the same Supabase project; files stay in Drive) ──
 # Bots add a row per video with the submit_video_for_review RPC
 # (brain knowledge/agent-building/video-reviews.md). The hub reads rows with the logs read
@@ -447,12 +473,19 @@ _drive = {"creds": None}
 _thumbs = {}
 
 
-def supabase_get(table, params):
+def supabase_get(table, params, attempts=2):
     q = urllib.parse.urlencode(params)
     req = urllib.request.Request(f"{LOGS_URL}/rest/v1/{table}?{q}", headers={
         "apikey": LOGS_READ_KEY, "Authorization": f"Bearer {LOGS_READ_KEY}"})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        return json.loads(r.read().decode())
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return json.loads(r.read().decode())
+        except urllib.error.HTTPError:
+            raise                           # Supabase answered; retrying won't change it
+        except (urllib.error.URLError, TimeoutError):
+            if attempt == attempts - 1:
+                raise                       # network blip (e.g. TLS handshake timeout): one retry
 
 
 def fetch_videos(limit=300):
@@ -643,6 +676,9 @@ class Handler(BaseHTTPRequestHandler):
 
         elif url.path == "/api/activity":
             self._json(200, fetch_activity(arg("agent")))
+
+        elif url.path == "/api/logs":
+            self._json(200, fetch_logs(arg("agent"), arg("before"), arg("before_id")))
 
         elif url.path == "/api/prs":
             self._json(200, fetch_prs(force=arg("refresh") == "1"))
