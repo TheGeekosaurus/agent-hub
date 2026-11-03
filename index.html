@@ -199,7 +199,10 @@
 <div class="shell">
 <nav class="nav">
   <a class="brand" href="#"><div class="logo"></div>Agent Hub</a>
-  <a class="nav-item" data-page="agents" href="#">
+  <a class="nav-item" data-page="dashboard" href="#">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M2.25 7.25L8 2.5l5.75 4.75v6.25a1 1 0 0 1-1 1h-2.5v-4h-4.5v4h-2.5a1 1 0 0 1-1-1z"/></svg>
+    Dashboard<span class="badge" id="needs-badge" title="Items that need you"></span></a>
+  <a class="nav-item" data-page="agents" href="#/agents">
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.75" y="1.75" width="5" height="5" rx="1.2"/><rect x="9.25" y="1.75" width="5" height="5" rx="1.2"/><rect x="1.75" y="9.25" width="5" height="5" rx="1.2"/><rect x="9.25" y="9.25" width="5" height="5" rx="1.2"/></svg>
     Agents</a>
   <a class="nav-item" data-page="prs" href="#/prs">
@@ -272,27 +275,35 @@ function renderBrainStatus(b) {
 }
 
 // ── Overview ───────────────────────────────────────────────────────────
-function needBox(title, items, line, emptyMsg) {
+function needBox(title, items, line, emptyMsg, moreHref) {
+  const more = items.length > 6 && moreHref ? `<li><a href="${moreHref}">+${items.length - 6} more</a></li>` : ''
   return `<div class="need"><div class="head"><b>${title}</b><span class="n">${items.length}</span></div>
-    ${items.length ? `<ul>${items.slice(0, 6).map(line).join('')}</ul>` : `<div class="none">${emptyMsg}</div>`}</div>`
+    ${items.length ? `<ul>${items.slice(0, 6).map(line).join('')}${more}</ul>` : `<div class="none">${emptyMsg}</div>`}</div>`
 }
 const recLink = r => `<a href="#/agent/${esc(r.agent)}/file/${encodeURIComponent(r.path)}">${esc(r.title)}</a>`
 
-function renderOverview() {
-  const { agents, needs } = overview
+// The Dashboard: everything waiting on Denis, across agents, PRs and videos
+function renderDashboard() {
+  const { needs } = overview
+  $app.innerHTML = `<div class="page-head"><div><h1>Dashboard</h1>
+      <div class="sub">What's waiting on you across the agents, brain and the video queue.</div></div></div>
+    <h2>Needs you</h2>
+    <div class="needs">
+      <div class="need" id="need-videos"><div class="head"><b>Videos to review</b><span class="n">…</span></div></div>
+      <div class="need" id="need-prs"><div class="head"><b>Brain PRs to merge</b><span class="n">…</span></div></div>
+      ${needBox('Proposals awaiting your decision', needs.proposals, r => `<li>${recLink(r)} · ${esc(r.agentName)}</li>`, 'Nothing pending')}
+      ${needBox('Checks due', needs.due, r => `<li>${recLink(r)} · ${esc(r.agentName)} · due ${esc(r.checkAt)}</li>`, 'No task is past its checkAt')}
+      ${needBox('Stuck tasks', needs.stuck, r => `<li>${recLink(r)} · ${esc(r.agentName)}</li>`, 'Nothing running over 14 days')}
+    </div>`
+}
+
+function renderAgents() {
+  const { agents } = overview
   const order = { active: 0, paused: 1, idle: 2, retired: 3 }
   const sorted = [...agents].sort((x, y) => (order[x.status] ?? 1) - (order[y.status] ?? 1))
   const tally = Object.entries(agents.reduce((t, a) => (t[a.status] = (t[a.status] || 0) + 1, t), {}))
     .sort((x, y) => (order[x[0]] ?? 1) - (order[y[0]] ?? 1)).map(([k, n]) => `${n} ${k}`).join(', ')
   $app.innerHTML = `<div class="layout"><div class="main-col">
-    <h2>Needs you</h2>
-    <div class="needs">
-      ${needBox('Proposals awaiting your decision', needs.proposals, r => `<li>${recLink(r)} · ${esc(r.agentName)}</li>`, 'Nothing pending')}
-      ${needBox('Checks due', needs.due, r => `<li>${recLink(r)} · ${esc(r.agentName)} · due ${esc(r.checkAt)}</li>`, 'No task is past its checkAt')}
-      ${needBox('Stuck tasks', needs.stuck, r => `<li>${recLink(r)} · ${esc(r.agentName)}</li>`, 'Nothing running over 14 days')}
-      <div class="need" id="need-prs"><div class="head"><b>Brain PRs to merge</b><span class="n">…</span></div></div>
-      <div class="need" id="need-videos"><div class="head"><b>Videos to review</b><span class="n">…</span></div></div>
-    </div>
     <h2>Agents · ${tally}</h2>
     <div class="grid">${sorted.map(card).join('') || '<div class="empty">No agent folders in brain/agents/</div>'}</div>
     </div><aside class="side-col"><h2>Schedule</h2>${scheduleList(overview.schedule)}</aside></div>`
@@ -344,7 +355,7 @@ async function renderAgent(slug, tab, filePath) {
   const tabs = [['overview', 'Overview'], ['tasks', 'Tasks', r.tasks.length], ['learnings', 'Learnings', r.learnings.length],
     ['proposals', 'Proposals', r.proposals.length], ['routines', 'Routines', a.routines ? a.routines.routines.length : 0], ['activity', 'Activity'], ['files', 'Files', a.files.length]]
   $app.innerHTML = `
-    <span class="back" onclick="location.hash=''">← All agents</span>
+    <a class="back" href="#/agents">← All agents</a>
     <div class="detail-head">${avatar(a)}<div>
       <h1>${esc(a.name)}</h1><div class="card-role">${esc(a.role)}</div>
       <div class="meta-row">
@@ -461,7 +472,7 @@ async function fillPRNeed() {
     const open = (await loadPRs()).prs.filter(p => p.state === 'OPEN')
     if (!document.body.contains(box)) return
     box.outerHTML = needBox('Brain PRs to merge', open,
-      p => `<li><a href="#/prs">#${p.number} ${esc(p.title)}</a> · ${esc(prAgent(p).name)} · ${ago(p.createdAt)}</li>`, 'No open PRs')
+      p => `<li><a href="#/prs">#${p.number} ${esc(p.title)}</a> · ${esc(prAgent(p).name)} · ${ago(p.createdAt)}</li>`, 'No open PRs', '#/prs')
   } catch (e) { box.querySelector('.n').textContent = '?' }
 }
 
@@ -548,7 +559,7 @@ async function fillVideoNeed() {
     const pending = data.videos.filter(v => v.status === 'pending')
     box.outerHTML = needBox('Videos to review', pending,
       v => `<li><a href="#/videos">${esc(v.title)}</a> · ${esc(v.account || v.agent_name)} · ${ago(v.created_at)}</li>`,
-      data.missingTable ? 'Review queue not set up yet' : 'Nothing waiting')
+      data.missingTable ? 'Review queue not set up yet' : 'Nothing waiting', '#/videos')
   } catch (e) { if (box) box.querySelector('.n').textContent = '?' }
 }
 
@@ -617,10 +628,21 @@ async function renderVideos(status, account) {
   }))
 }
 
+// Dashboard badge = everything in "Needs you"; PR/video counts come from the last load
+async function updateNeedsBadge() {
+  const n = overview.needs
+  let total = n.proposals.length + n.due.length + n.stuck.length
+  try {
+    const [p, v] = await Promise.all([prsData || loadPRs(), loadVideos()])
+    total += p.prs.filter(x => x.state === 'OPEN').length + v.videos.filter(x => x.status === 'pending').length
+  } catch (e) { /* leave the brain-only count */ }
+  document.getElementById('needs-badge').textContent = total || ''
+}
+
 // ── Router ─────────────────────────────────────────────────────────────
 async function route() {
   const parts = location.hash.replace(/^#\/?/, '').split('/')
-  const page = ['prs', 'videos'].includes(parts[0]) ? parts[0] : 'agents'
+  const page = ['prs', 'videos', 'agents'].includes(parts[0]) ? parts[0] : parts[0] === 'agent' ? 'agents' : 'dashboard'
   document.querySelectorAll('.nav-item[data-page]').forEach(n => n.classList.toggle('on', n.dataset.page === page))
   try {
     overview = await getJSON('/api/overview')
@@ -636,7 +658,11 @@ async function route() {
     const filePath = parts[2] === 'file' ? decodeURIComponent(parts.slice(3).join('/')) : null
     await renderAgent(parts[1], filePath ? null : parts[2], filePath)
     loadPRs().catch(() => {}); loadVideos().catch(() => {})
-  } else { renderOverview(); fillPRNeed(); fillVideoNeed() }
+  } else if (page === 'agents') {
+    renderAgents()
+    loadPRs().catch(() => {}); loadVideos().catch(() => {})
+  } else { renderDashboard(); fillPRNeed(); fillVideoNeed() }
+  updateNeedsBadge()
   $app.classList.toggle('wide', !(parts[0] === 'agent' && parts[1]))
   window.scrollTo(0, 0)
 }
